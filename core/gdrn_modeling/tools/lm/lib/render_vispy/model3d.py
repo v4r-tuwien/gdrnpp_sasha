@@ -10,7 +10,7 @@ import pyassimp.postprocess
 
 # import optimesh
 import scipy
-from meshplex import MeshTri
+import open3d as o3d
 from plyfile import PlyData, PlyElement
 from scipy.spatial.distance import pdist
 from skimage import measure
@@ -332,23 +332,48 @@ class Model3D:
             else:
                 iprint("Loading {} without any colors!!".format(filename))
 
-    def _smooth_laplacian(self, vertices, faces, iterations):
-        mesh = MeshTri(vertices, faces)
-        # move interior points into average of their neighbors
-        num_neighbors = np.zeros(len(mesh.node_coords), dtype=int)
+    def _smooth_laplacian(vertices, faces, iterations=1):
+        """
+        Laplacian smoothing of a triangular mesh.
 
-        idx = mesh.edges["nodes"]
-        num_neighbors = _fast_add_at(num_neighbors, idx, np.ones(idx.shape, dtype=int))
+        Args:
+            vertices (np.ndarray): (N, 3) array of vertex coordinates.
+            faces (np.ndarray): (M, 3) array of indices of vertices forming faces.
+            iterations (int): Number of smoothing iterations.
 
-        new_points = np.zeros(mesh.node_coords.shape)
-        new_points = _fast_add_at(new_points, idx[:, 0], mesh.node_coords[idx[:, 1]])
-        new_points = _fast_add_at(new_points, idx[:, 1], mesh.node_coords[idx[:, 0]])
+        Returns:
+            np.ndarray: Smoothed vertex coordinates.
+        """
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
 
-        new_points /= num_neighbors[:, None]
-        idx = mesh.is_boundary_node
-        new_points[idx] = mesh.node_coords[idx]
+        # For smoothing, we'll iterate over the mesh to adjust the vertex positions
+        for _ in range(iterations):
+            # Create a copy of the vertices
+            new_vertices = np.asarray(mesh.vertices)
 
-        return new_points
+            # Access the vertices and faces to find neighbors
+            neighbors = np.zeros(len(vertices), dtype=list)
+            for tri in faces:
+                # For each face, add each pair of vertices as neighbors
+                for i in range(3):
+                    for j in range(i + 1, 3):
+                        neighbors[tri[i]].append(tri[j])
+                        neighbors[tri[j]].append(tri[i])
+
+            # Smooth vertices by averaging neighbors
+            for i, vertex in enumerate(vertices):
+                if i not in neighbors:
+                    continue
+                neighbor_vertices = np.array([vertices[n] for n in neighbors[i]])
+                new_vertices[i] = np.mean(neighbor_vertices, axis=0)
+
+            # Update the mesh with the new vertices
+            mesh.vertices = o3d.utility.Vector3dVector(new_vertices)
+
+        # Convert the smoothed vertices back to a numpy array and return
+        return np.asarray(mesh.vertices)
 
     # Takes sdf and extends to return a Model3D
     def load_from_tsdf(
