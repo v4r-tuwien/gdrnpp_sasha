@@ -331,7 +331,7 @@ class Model3D:
             else:
                 iprint("Loading {} without any colors!!".format(filename))
 
-    def _smooth_laplacian(vertices, faces, iterations=1):
+    def _smooth_laplacian(self, vertices, faces, iterations=1):
         """
         Laplacian smoothing of a triangular mesh.
 
