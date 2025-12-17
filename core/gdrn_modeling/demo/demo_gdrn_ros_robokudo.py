@@ -31,6 +31,9 @@ class GDRN_ROS:
     def __init__(self, renderer_request_queue, renderer_result_queue, dataset_name):
             intrinsics = np.asarray(rospy.get_param('/pose_estimator/intrinsics'))
             self.frame_id = rospy.get_param('/pose_estimator/color_frame_id')
+
+            self.reflow = "tracebotcanister" in dataset_name
+            
             self.gdrn_predictor = GdrnPredictor(
                 config_file_path=osp.join(PROJ_ROOT,"configs/gdrn/" + dataset_name + "/" + dataset_name + "_inference.py"),
                 ckpt_file_path=osp.join(PROJ_ROOT,"output/gdrnpp_" + dataset_name + "_weights.pth"),
@@ -107,7 +110,8 @@ class GDRN_ROS:
                 data_dict,
                 out_dict,
                 self.renderer_request_queue, 
-                self.renderer_result_queue)
+                self.renderer_result_queue,
+                reflow=self.reflow)
             #self.gdrn_predictor.gdrn_visualization(batch=data_dict, out_dict=out_dict, image=image)
 
             obj_name = self.gdrn_predictor.objs[int(obj_id)]

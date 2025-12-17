@@ -45,6 +45,7 @@ from core.gdrn_modeling.models import (
     GDRN_cls2reg,
     GDRN_double_mask,
     GDRN_Dstream_double_mask,
+    GDRN_Rho_flow,
 )  # noqa
 
 class GdrnPredictor():
@@ -82,7 +83,7 @@ class GdrnPredictor():
 
         #set your trained object names
         # Test one higher
-        if model_string == "ycbv" or model_string == "ycb_ichores":
+        if model_string == "ycbv" or model_string == "ycb_ichores" or model_string == "tracebotcanister":
             object_id_file = osp.join(osp.join(osp.join(PROJ_ROOT, f'configs/gdrn'), model_string), model_string + '.yaml')
             with open(object_id_file, 'r') as stream:
                 data_loaded = yaml.safe_load(stream)
@@ -165,7 +166,7 @@ class GdrnPredictor():
 
         return out_dict
 
-    def postprocessing(self, data_dict, out_dict, renderer_request_queue, renderer_result_queue):
+    def postprocessing(self, data_dict, out_dict, renderer_request_queue, renderer_result_queue, reflow=False):
         """
         Postprocess the gdrn model outputs
         Args:
@@ -185,7 +186,7 @@ class GdrnPredictor():
                 "score": float(data_dict["score"][i_inst]),
                 "bbox_est": data_dict["bbox_est"][i_inst].detach().cpu().numpy(),  # xyxy
             }
-            if self.cfg.TEST.USE_PNP:
+            if not reflow and self.cfg.TEST.USE_PNP:
                 pose_est_pnp = get_pnp_ransac_pose(self.cfg, data_dict, out_dict, i_inst, i_out)
                 cur_res["R"] = pose_est_pnp[:3, :3]
                 cur_res["t"] = pose_est_pnp[:3, 3]
@@ -198,7 +199,7 @@ class GdrnPredictor():
                 )
             data_dict["cur_res"].append(cur_res)
 
-        if self.cfg.TEST.USE_DEPTH_REFINE:
+        if not reflow and self.cfg.TEST.USE_DEPTH_REFINE:
            self.process_depth_refine(data_dict, out_dict, renderer_request_queue, renderer_result_queue)
 
         poses = {}
