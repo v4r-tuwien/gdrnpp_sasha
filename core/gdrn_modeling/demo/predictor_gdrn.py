@@ -13,6 +13,7 @@ import json
 import rospy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+import math
 
 from core.gdrn_modeling.main_gdrn import Lite
 from core.gdrn_modeling.engine.engine_utils import get_out_mask, get_out_coor, batch_data_inference_roi
@@ -30,6 +31,7 @@ from detectron2.structures import BoxMode
 from detectron2.evaluation import inference_context
 from detectron2.layers import paste_masks_in_image
 from torch.cuda.amp import autocast
+import transforms3d as tf3d
 
 from types import SimpleNamespace
 from setproctitle import setproctitle
@@ -47,6 +49,20 @@ from core.gdrn_modeling.models import (
     GDRN_Dstream_double_mask,
     GDRN_Rho_flow,
 )  # noqa
+
+def align_sympose_with_vector(vector, pose, align_axis, rot_axis):
+    vector /= np.linalg.norm(vector)
+    proj_vector_on_rot_axis = np.dot(vector, pose[:3, rot_axis]) *pose[:3, rot_axis]
+    proj_vector_rot_plane = vector - proj_vector_on_rot_axis
+    proj_vector_rot_plane /= np.linalg.norm(proj_vector_rot_plane)
+    alpha = math.acos(np.dot(pose[:3, align_axis], proj_vector_rot_plane))
+    if np.dot(np.cross(proj_vector_rot_plane, pose[:3, align_axis]), pose[:3, rot_axis]) > 0:
+        alpha *= -1
+    euler_angles = [0., 0., 0.]
+    euler_angles[rot_axis] = alpha
+    new_rot = np.dot(pose[:3, :3], tf3d.euler.euler2mat(*euler_angles, 'sxyz'))
+
+    return new_rot
 
 class GdrnPredictor():
     def __init__(self,
@@ -166,7 +182,7 @@ class GdrnPredictor():
 
         return out_dict
 
-    def postprocessing(self, data_dict, out_dict, renderer_request_queue, renderer_result_queue, reflow=False):
+    def postprocessing(self, data_dict, out_dict, renderer_request_queue, renderer_result_queue, reflow=False, plane_normal=[]):
         """
         Postprocess the gdrn model outputs
         Args:
@@ -199,6 +215,7 @@ class GdrnPredictor():
                 )
             data_dict["cur_res"].append(cur_res)
 
+
         if not reflow and self.cfg.TEST.USE_DEPTH_REFINE:
            self.process_depth_refine(data_dict, out_dict, renderer_request_queue, renderer_result_queue)
 
@@ -207,6 +224,18 @@ class GdrnPredictor():
             pose = np.eye(4)
             pose[:3, :3] = res['R']
             pose[:3, 3] = res['t']
+
+            if len(plane_normal) != 0:
+                tmp_pose = np.eye(4)
+                tmp_pose[:3, :3] = res['R']
+                tmp_pose[:3, 3] = res['t']
+
+                if reflow:
+                    z_vec = np.array([0.,0.,-1.])
+                    proj_vector_on_plane_normal = np.dot(z_vec, plane_normal) * plane_normal
+                    x_plane_vec = z_vec - proj_vector_on_plane_normal
+                    pose[:3, :3] = align_sympose_with_vector(x_plane_vec, tmp_pose, 0, 2)
+
             poses[self.objs.get(res['obj_id'])] = pose
 
         return poses

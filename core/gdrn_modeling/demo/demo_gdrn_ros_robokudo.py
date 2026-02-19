@@ -27,6 +27,9 @@ import tf
 from lib.render_vispy.renderer import RendererROS
 import queue
 
+from threeD_boxes import THREED_BOXES
+
+
 class GDRN_ROS:
     def __init__(self, renderer_request_queue, renderer_result_queue, dataset_name):
             intrinsics = np.asarray(rospy.get_param('/pose_estimator/intrinsics'))
@@ -76,12 +79,15 @@ class GDRN_ROS:
         except CvBridgeError as e:
             print(e)
 
-        try:
-            depth.encoding = "mono16"
-            depth_img = CvBridge().imgmsg_to_cv2(depth, "mono16")
-            depth_img = depth_img/1000
-        except CvBridgeError as e:
-            print(e)
+        if not self.reflow:
+            try:
+                depth.encoding = "mono16"
+                depth_img = CvBridge().imgmsg_to_cv2(depth, "mono16")
+                depth_img = depth_img/1000
+            except CvBridgeError as e:
+                print(e)
+        else:
+            depth_img = None
 
         valid_class_names = []
         pose_results = []
@@ -104,6 +110,18 @@ class GDRN_ROS:
             outputs = torch.tensor([float(ymin), float(xmin), float(ymax), float(xmax),  score, score, float(obj_id - 1)])
             outputs = list((outputs.unsqueeze(0)))
 
+            if self.reflow:
+                plane_normal = np.array(rospy.get_param('/grasping_pipeline/plane_normal', []))
+                plane_pt = np.array(rospy.get_param('/grasping_pipeline/plane_point', [])) 
+
+                print("=============================================\n\n\n\n")
+                print(f"Plane normal: {plane_normal}")
+                print(f"Plane point: {plane_pt}")
+                print("\n\n\n\n=============================================")
+            else:
+                plane_normal = []
+                plane_pt = []
+
             data_dict = self.gdrn_predictor.preprocessing(outputs=outputs, image=image, depth_img=depth_img)
             out_dict = self.gdrn_predictor.inference(data_dict)
             poses = self.gdrn_predictor.postprocessing(
@@ -111,7 +129,8 @@ class GDRN_ROS:
                 out_dict,
                 self.renderer_request_queue, 
                 self.renderer_result_queue,
-                reflow=self.reflow)
+                reflow=self.reflow,
+                plane_normal=plane_normal)
             #self.gdrn_predictor.gdrn_visualization(batch=data_dict, out_dict=out_dict, image=image)
 
             obj_name = self.gdrn_predictor.objs[int(obj_id)]
@@ -120,6 +139,29 @@ class GDRN_ROS:
             R = poses[obj_name][ 0:3,0:3 ]
             R_0[ 0:3,0:3 ] = R
             t = poses[obj_name][ 0:3,3:4 ].ravel()
+
+            ###########################################################
+            if self.reflow is True:
+                if len(plane_normal) != 0 and len(plane_pt) != 0:
+                    ori_points = np.ascontiguousarray(THREED_BOXES["tracebotcanister"], dtype=np.float32)
+                    oriented_bbox = poses[obj_name][:3,:3].dot(ori_points.T).T
+                    oriented_bbox += np.repeat(poses[obj_name][:3,3][np.newaxis, :], 8, axis=0)  # * 0.001
+
+                    # Choose the bounding box point that has the smallest dot product to the plane normal (signed)
+                    min_dot_prod_to_plane_idx = np.argmin(np.dot((oriented_bbox - plane_pt), plane_normal))
+                    min_dot_prod_to_plane_pt = oriented_bbox[min_dot_prod_to_plane_idx, :]
+
+                    # Create the corresponding normalized ray.
+                    ray = min_dot_prod_to_plane_pt / np.linalg.norm(min_dot_prod_to_plane_pt)
+
+                    # Compute the corresponding intersection between plane and ray
+                    t = np.dot(plane_normal, plane_pt) / np.dot(plane_normal, ray)
+                    pt_ray_intersection = t*ray
+
+                    poses[obj_name][:3,3] += pt_ray_intersection - min_dot_prod_to_plane_pt
+                else:
+                    print("No plane normal or plane point received from ROS param server!")
+            ###########################################################
 
             rot_quat = tf.transformations.quaternion_from_matrix(R_0)
 
@@ -184,3 +226,5 @@ if __name__ == "__main__":
             renderer_result_queue.put(ren_dp)
         else:
             rospy.sleep(0.1)
+
+    
